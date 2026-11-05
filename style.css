@@ -259,9 +259,27 @@ kbd {
   transition: none !important;
 }
 
+/* Soft, dim copy of the photo behind small originals so the screen still
+   feels full without stretching the real picture into blocky pixels */
+.scene-backdrop {
+  position: absolute;
+  inset: -6%;
+  width: 112%;
+  height: 112%;
+  object-fit: cover;
+  filter: blur(36px) brightness(0.45) saturate(1.15);
+  opacity: 0;
+  transition: opacity 700ms var(--ease);
+  pointer-events: none;
+}
+
+.scene.is-lowres .scene-backdrop {
+  opacity: 1;
+}
+
 /* The small preview is softened until the sharp copy arrives */
 .scene-img.is-soft {
-  filter: blur(6px);
+  filter: blur(3px);
 }
 
 .scene-img {
@@ -271,7 +289,6 @@ kbd {
   top: 0;
   max-width: none;
   transform-origin: 0 0;
-  will-change: transform;
   user-select: none;
   -webkit-user-drag: none;
 }

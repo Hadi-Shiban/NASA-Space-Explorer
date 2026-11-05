@@ -477,16 +477,26 @@ function sizedUrl(src, width) {
   return url.href;
 }
 
-// Pick a width for the main view, rounded so the browser can reuse downloads
-function stageWidth(entry, forExplore) {
-  // Phones get a lighter copy: their screens are small and data can be slow
-  const small = Math.min(window.innerWidth, window.innerHeight) < 820;
-  const ratio = Math.min(window.devicePixelRatio || 1, small ? 1.5 : 2);
-  const cap = small ? 1792 : 2560;
-  if (forExplore) return small ? 2048 : 2560;
-  const aspect = entry.size ? entry.size.width / entry.size.height : 1.5;
-  const coverWidth = settings.mode === 'original' ? window.innerWidth : Math.max(window.innerWidth, window.innerHeight * aspect);
-  return Math.min(cap, Math.ceil((coverWidth * ratio * 1.1) / 256) * 256);
+// How many image pixels we need across the photo so it looks sharp at its
+// current size on this screen (retina screens have 2 to 3 pixels per point).
+// Rounded up so the browser can reuse downloads. In Explore mode this can go
+// all the way up to NASA's original file.
+function wantedWidth(entry, cam) {
+  const ratio = Math.min(window.devicePixelRatio || 1, 3);
+  const original = entry.size ? entry.size.width : Infinity;
+  const phone = Math.min(window.innerWidth, window.innerHeight) < 820;
+  const cap = settings.mode === 'explore' ? Infinity : phone ? 2560 : 3840;
+  const shown = cam.w * cam.ts * ratio; // device pixels across the photo
+  return Math.min(original, cap, Math.max(512, Math.ceil(shown / 512) * 512));
+}
+
+// Small copy used for gallery cards and as the instant first frame of a scene
+const PREVIEW_WIDTH = 640;
+
+// The details pop-up is at most 960 points wide
+function modalWidth() {
+  const ratio = Math.min(window.devicePixelRatio || 1, 3);
+  return Math.min(2560, Math.ceil((Math.min(960, window.innerWidth) * ratio) / 512) * 512);
 }
 
 // Load an image, trying each address in order. Resolves with the <img>.
@@ -511,8 +521,10 @@ function loadImage(sources) {
 
 const preloaded = new Set();
 function preload(entry) {
-  if (!entry || !entry.image || entry.type !== 'image') return;
-  const src = sizedUrl(entry.image, stageWidth(entry));
+  if (!entry || !entry.image || entry.type !== 'image' || !entry.size) return;
+  const cam = newCamera(entry.size.width, entry.size.height, true);
+  fitCamera(cam);
+  const src = sizedUrl(entry.image, wantedWidth(entry, cam));
   if (preloaded.has(src)) return;
   preloaded.add(src);
   const img = new Image();
@@ -619,9 +631,14 @@ const stars = (() => {
 // =====================================================================
 // Each scene layer keeps its own camera. x and y are offsets from center in
 // screen pixels, s is the scale. "t" values are targets we ease toward.
-function newCamera(width, height) {
-  return { w: width, h: height, s: 1, x: 0, y: 0, ts: 1, tx: 0, ty: 0, min: 1, max: 1 };
+// `native` is true when w and h are the original file's real pixel size
+function newCamera(width, height, native = false) {
+  return { w: width, h: height, native, s: 1, x: 0, y: 0, ts: 1, tx: 0, ty: 0, min: 1, max: 1, lowres: false };
 }
+
+// Stretching a photo more than this (screen points per image pixel) makes
+// it look pixelated, so small originals are not blown up past it.
+const MAX_UPSCALE = 1.4;
 
 let cameraRunning = false;
 let lastCameraTime = 0;
@@ -654,13 +671,28 @@ function fitCamera(cam, keepPosition = false) {
   const cover = Math.max(W / cam.w, H / cam.h);
   const lookAround = settings.cursor && settings.motion !== 'off';
 
+  cam.lowres = false;
   if (settings.mode === 'immersive') {
-    cam.min = cam.max = cover * (lookAround ? MOTION[settings.motion].overscan : 1);
+    let scale = cover * (lookAround ? MOTION[settings.motion].overscan : 1);
+    // A small original would turn blocky if stretched to fill the screen.
+    // Keep it sharp instead; a soft blurred copy fills the space around it.
+    // If it only needs a little more stretch than that, filling the screen
+    // looks better than a thin blurred band, so just fill it.
+    if (cam.native && scale > MAX_UPSCALE) {
+      if (cover <= MAX_UPSCALE * 1.15) {
+        scale = cover;
+      } else {
+        scale = Math.max(contain, MAX_UPSCALE);
+        cam.lowres = scale < cover - 0.001;
+      }
+    }
+    cam.min = cam.max = scale;
   } else if (settings.mode === 'original') {
     cam.min = cam.max = contain;
   } else {
+    // Zoom in until one image pixel covers about two screen points
     cam.min = contain;
-    cam.max = Math.max(contain * 6, 1.5);
+    cam.max = Math.max(contain * 1.5, cam.native ? 2 : 6);
   }
   if (!keepPosition) {
     cam.ts = cam.min;
@@ -709,6 +741,11 @@ function cameraFrame(time) {
     cam.y = cam.ty;
     renderCamera(layer);
     cameraRunning = false;
+    // Dropping the GPU hint lets the browser redraw the photo crisply at its
+    // new size (otherwise a zoomed photo can stay at its old, softer detail)
+    const img = layer.querySelector('.scene-img');
+    if (img) img.style.willChange = 'auto';
+    ensureResolution(layer);
     return;
   }
   requestAnimationFrame(cameraFrame);
@@ -716,9 +753,43 @@ function cameraFrame(time) {
 
 function moveCamera() {
   if (cameraRunning) return;
+  const img = activeScene().querySelector('.scene-img');
+  if (img) img.style.willChange = 'transform';
   cameraRunning = true;
   lastCameraTime = 0;
   requestAnimationFrame(cameraFrame);
+}
+
+// Make sure the loaded copy has enough pixels for how big the photo is shown.
+// Called after the photo settles, so zooming in fetches a sharper copy.
+function ensureResolution(layer) {
+  const cam = layer.camera;
+  const entry = layer.entry;
+  const img = layer.querySelector('.scene-img');
+  if (!cam || !entry || !img) return;
+
+  const want = wantedWidth(entry, cam);
+  if ((layer.loadedWidth || 0) >= want * 0.9) {
+    img.classList.remove('is-soft');
+    return;
+  }
+  if ((layer.pendingWidth || 0) >= want) return; // already on its way
+  layer.pendingWidth = want;
+
+  const original = entry.size ? entry.size.width : Infinity;
+  const sources = want >= original ? [sizedUrl(entry.image, original), entry.image] : [sizedUrl(entry.image, want), entry.image];
+  loadImage(sources).then((sharp) => {
+    if (layer.entry !== entry) return; // the user moved on
+    img.src = sharp.src;
+    layer.loadedWidth = Math.max(layer.loadedWidth || 0, Math.min(want, sharp.naturalWidth || want));
+    img.classList.remove('is-soft');
+  }).catch(() => img.classList.remove('is-soft')).finally(() => {
+    if (layer.pendingWidth === want) layer.pendingWidth = 0;
+  });
+}
+
+function syncLowres(layer) {
+  layer.classList.toggle('is-lowres', Boolean(layer.camera && layer.camera.lowres));
 }
 
 function resetView() {
@@ -852,8 +923,11 @@ window.addEventListener('resize', () => {
       layer.camera.x = layer.camera.tx;
       layer.camera.y = layer.camera.ty;
       renderCamera(layer);
+      syncLowres(layer);
     }
   });
+  // Going fullscreen or rotating a phone can need a sharper copy
+  ensureResolution(activeScene());
 });
 
 // =====================================================================
@@ -886,34 +960,35 @@ async function buildScene(entry, token) {
 
   if (entry.type === 'image') {
     const big = entry.image;
-    const sharpSrc = sizedUrl(big, stageWidth(entry, settings.mode === 'explore'));
+    // Show the small gallery copy first (usually already downloaded) so the
+    // scene appears right away. ensureResolution() then swaps in a sharp copy.
     let img;
+    let loadedWidth;
     try {
-      // Show the small gallery copy first (usually already downloaded),
-      // then swap in the sharp one. Phones see a picture right away.
-      img = await loadImage([sizedUrl(big, 480)]);
+      img = await loadImage([sizedUrl(big, PREVIEW_WIDTH)]);
+      loadedWidth = img.naturalWidth;
     } catch (error) {
-      img = await loadImage([sharpSrc, big]);
+      img = await loadImage([big]);
+      loadedWidth = Infinity;
     }
     if (token !== travelToken) return null;
-    if (img.src !== sharpSrc) {
-      img.classList.add('is-soft');
-      loadImage([sharpSrc, big]).then((sharp) => {
-        if (document.contains(img) || token === travelToken) {
-          img.src = sharp.src;
-          img.classList.remove('is-soft');
-        }
-      }).catch(() => img.classList.remove('is-soft'));
-    }
-    img.className = `scene-img${img.classList.contains('is-soft') ? ' is-soft' : ''}`;
+    img.className = 'scene-img is-soft';
     img.alt = entry.alt;
     img.draggable = false;
     const width = entry.size ? entry.size.width : img.naturalWidth;
     const height = entry.size ? entry.size.height : img.naturalHeight;
     img.style.width = `${width}px`;
     img.style.height = `${height}px`;
-    inner.appendChild(img);
-    return { inner, camera: newCamera(width, height) };
+
+    // Blurred copy that fills the screen around small originals
+    const backdrop = document.createElement('img');
+    backdrop.className = 'scene-backdrop';
+    backdrop.src = img.src;
+    backdrop.alt = '';
+    backdrop.setAttribute('aria-hidden', 'true');
+
+    inner.append(backdrop, img);
+    return { inner, camera: newCamera(width, height, Boolean(entry.size)), loadedWidth };
   }
 
   // Videos and other media sit centered without the camera
@@ -1016,13 +1091,19 @@ async function travelTo(index) {
   incoming.textContent = '';
   incoming.appendChild(built.inner);
   incoming.camera = built.camera;
+  incoming.entry = entry;
+  incoming.loadedWidth = built.loadedWidth || 0;
+  incoming.pendingWidth = 0;
+  outgoing.entry = null;
   incoming.dataset.type = entry.type;
   if (incoming.camera) {
     fitCamera(incoming.camera);
+    syncLowres(incoming);
     // Start slightly closer, then drift out to the resting view
     const start = settings.motion === 'off' || settings.mode === 'explore' ? 1 : 1.04;
     incoming.camera.s = incoming.camera.ts * start;
     renderCamera(incoming);
+    ensureResolution(incoming); // start the sharp download now
   }
 
   body.style.setProperty('--t-out', `${timing.out}ms`);
@@ -1093,7 +1174,7 @@ function showGalleryMessage(text) {
 }
 
 function cardImage(entry) {
-  if (entry.image) return sizedUrl(entry.image, 480);
+  if (entry.image) return sizedUrl(entry.image, PREVIEW_WIDTH);
   return 'img/NASA-Logo-Large.jpg';
 }
 
@@ -1289,7 +1370,7 @@ function openModal(entry = entries[currentIndex], opener) {
   modalMedia.textContent = '';
   if (entry.type === 'image') {
     const img = document.createElement('img');
-    img.src = sizedUrl(entry.image, 1600);
+    img.src = sizedUrl(entry.image, modalWidth());
     img.alt = entry.alt;
     img.addEventListener('error', () => {
       if (img.src !== entry.image) img.src = entry.image;
@@ -1406,30 +1487,20 @@ function applySettings() {
   body.dataset.mode = settings.mode;
   body.dataset.motion = settings.motion;
   layers.forEach((layer) => {
-    if (layer.camera) fitCamera(layer.camera);
+    if (layer.camera) {
+      fitCamera(layer.camera);
+      syncLowres(layer);
+    }
   });
-  moveCamera();
+  moveCamera(); // sharper copies are fetched when the photo settles
   stars.wake();
   stars.draw();
-}
-
-// Explore mode swaps in a sharper copy of the picture for zooming
-function upgradeForExplore() {
-  const entry = entries[currentIndex];
-  const img = activeScene().querySelector('.scene-img');
-  if (!entry || !img || entry.type !== 'image') return;
-  const sharper = sizedUrl(entry.image, stageWidth(entry, true));
-  if (img.src === sharper) return;
-  loadImage([sharper]).then((loaded) => {
-    if (entries[currentIndex] === entry && document.contains(img)) img.src = loaded.src;
-  }).catch(() => {});
 }
 
 function setMode(mode) {
   settings.mode = mode;
   saveSettings();
   applySettings();
-  if (mode === 'explore') upgradeForExplore();
 }
 
 document.querySelectorAll('input[name="mode"]').forEach((input) => {
