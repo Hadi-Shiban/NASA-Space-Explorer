@@ -2,65 +2,212 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>NASA Space Explorer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>The Lucid Universe | NASA Space Explorer</title>
+  <meta name="description" content="An independent student project for exploring NASA's Astronomy Picture of the Day by date." />
+  <meta name="theme-color" content="#05060a" />
   <!-- Inter and Public Sans are the typefaces used in NASA's brand and web design system -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Public+Sans:wght@300;400;600&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://science.nasa.gov" />
+  <link rel="preconnect" href="https://assets.science.nasa.gov" />
   <link href="style.css" rel="stylesheet" type="text/css" />
 </head>
-<body>
-  <div class="container">
-    <header class="site-header">
-      <img src="img/nasa-worm-logo.png" alt="NASA Logo" class="logo" />
-      <h1>Space Explorer</h1>
-    </header>
+<body class="is-intro">
+  <!-- Slow star field behind everything (drawn in script.js) -->
+  <canvas id="stars" class="stars" aria-hidden="true"></canvas>
 
-    <p class="intro">Pick a start date to see nine days of NASA's Astronomy Picture of the Day.</p>
+  <!-- ===== Entry screen ===== -->
+  <section id="intro" class="intro" aria-labelledby="introTitle">
+    <div class="intro-inner">
+      <h1 id="introTitle" class="intro-title">The Lucid Universe</h1>
+      <p class="intro-sub">An exploration of space, time, and the unknown.</p>
+      <p class="intro-credit">Featuring NASA's Astronomy Picture of the Day.</p>
+      <button id="beginButton" class="begin-button" type="button">Begin Exploration</button>
+      <button id="beginPlain" class="text-button" type="button">Enter without fullscreen or effects</button>
+      <p class="intro-note">Best viewed in fullscreen. Press <kbd>Esc</kbd> any time to leave fullscreen.</p>
+    </div>
+  </section>
 
-    <div class="filters">
-      <label>
-        <span>Start date</span>
-        <input type="date" id="startDate" />
-      </label>
-      <label>
-        <span>End date</span>
-        <input type="date" id="endDate" />
-      </label>
-      <button id="getImages">Get Space Images</button>
+  <!-- ===== Main viewport ===== -->
+  <main id="app" class="app" aria-label="Space photo explorer" hidden>
+    <!-- The photograph lives here. Two layers let one scene fade into the next. -->
+    <div id="stage" class="stage" tabindex="-1" aria-describedby="caption">
+      <div class="scene" data-layer="a"></div>
+      <div class="scene" data-layer="b"></div>
     </div>
 
-    <!-- LevelUp: random space fact, chosen in script.js on each page load -->
-    <aside class="fact" aria-live="polite">
-      <h2>🚀 Did You Know?</h2>
-      <p id="factText"></p>
-    </aside>
+    <!-- Loading and error messages for the main view -->
+    <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
-    <main id="gallery" class="gallery">
-      <div class="placeholder">
-        <div class="placeholder-icon">🔭</div>
-        <p>Select a date range and click "Get Space Images" to explore the cosmos!</p>
+    <!-- Title and date of the current photo -->
+    <div id="caption" class="caption" aria-live="polite">
+      <p id="captionDate" class="caption-date"></p>
+      <h2 id="captionTitle" class="caption-title"></h2>
+      <div class="caption-actions">
+        <button id="captionInfo" class="chip" type="button">Read about this image</button>
+        <span id="captionPos" class="caption-pos"></span>
       </div>
-    </main>
-  </div>
+    </div>
 
-  <!-- Modal: filled in by script.js when a gallery item is clicked -->
+    <!-- Previous / next arrows on the edges of the screen -->
+    <button id="prevButton" class="edge-nav edge-prev" type="button" aria-label="Previous photo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+    </button>
+    <button id="nextButton" class="edge-nav edge-next" type="button" aria-label="Next photo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+    </button>
+
+    <!-- Short "Did You Know?" fact that drifts in after you enter -->
+    <aside id="factToast" class="fact-toast" aria-hidden="true"></aside>
+
+    <!-- ===== Left icon rail ===== -->
+    <nav class="rail" aria-label="Explorer tools">
+      <button class="rail-button" type="button" data-panel="galleryPanel" aria-controls="galleryPanel" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></svg>
+        <span class="rail-label">Gallery</span>
+      </button>
+      <button class="rail-button" type="button" data-panel="datePanel" aria-controls="datePanel" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></svg>
+        <span class="rail-label">Dates</span>
+      </button>
+      <button class="rail-button" type="button" data-panel="discoverPanel" aria-controls="discoverPanel" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M15.5 8.5l-2 5-5 2 2-5z" /></svg>
+        <span class="rail-label">Discover</span>
+      </button>
+      <button id="railInfo" class="rail-button" type="button" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5.5M12 7.6v.2" /></svg>
+        <span class="rail-label">Info</span>
+      </button>
+      <button class="rail-button" type="button" data-panel="viewPanel" aria-controls="viewPanel" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+        <span class="rail-label">View</span>
+      </button>
+    </nav>
+
+    <!-- ===== Gallery panel (the assignment's gallery) ===== -->
+    <section id="galleryPanel" class="panel panel-wide" aria-labelledby="galleryHeading" hidden>
+      <header class="panel-head">
+        <h2 id="galleryHeading">Gallery</h2>
+        <button class="panel-close" type="button" aria-label="Close gallery">&times;</button>
+      </header>
+
+      <!-- LevelUp: random space fact, shown above the gallery -->
+      <aside class="fact" aria-labelledby="factHeading">
+        <h3 id="factHeading">🚀 Did You Know?</h3>
+        <p id="factText"></p>
+      </aside>
+
+      <div class="gallery-bar">
+        <p id="galleryRange" class="gallery-range"></p>
+        <div class="step-buttons">
+          <button id="galleryPrev" class="chip" type="button" aria-label="Previous photo">&larr;</button>
+          <span id="galleryPos" class="mono"></span>
+          <button id="galleryNext" class="chip" type="button" aria-label="Next photo">&rarr;</button>
+        </div>
+      </div>
+
+      <div id="gallery" class="gallery">
+        <div class="placeholder">
+          <div class="placeholder-icon">🔭</div>
+          <p>Select a date range and click "Get Space Images" to explore the cosmos!</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Date panel ===== -->
+    <section id="datePanel" class="panel" aria-labelledby="dateHeading" hidden>
+      <header class="panel-head">
+        <h2 id="dateHeading">Dates</h2>
+        <button class="panel-close" type="button" aria-label="Close dates">&times;</button>
+      </header>
+      <form id="dateForm" class="filters">
+        <label>
+          <span>Start date</span>
+          <input type="date" id="startDate" required />
+        </label>
+        <label>
+          <span>End date</span>
+          <input type="date" id="endDate" required />
+        </label>
+        <button id="getImages" class="primary" type="submit">Get Space Images</button>
+      </form>
+      <p class="hint">Choosing a start date fills in nine days. You can pick up to 31 days at a time, from June 16, 1995 to today.</p>
+      <div class="day-step">
+        <button id="dayEarlier" class="chip" type="button">&larr; Earlier days</button>
+        <button id="dayLater" class="chip" type="button">Later days &rarr;</button>
+      </div>
+      <p id="dateMessage" class="form-message" role="alert"></p>
+    </section>
+
+    <!-- ===== Discover panel ===== -->
+    <section id="discoverPanel" class="panel" aria-labelledby="discoverHeading" hidden>
+      <header class="panel-head">
+        <h2 id="discoverHeading">Discover</h2>
+        <button class="panel-close" type="button" aria-label="Close discover">&times;</button>
+      </header>
+      <p class="hint">Jump to pictures chosen at random from the whole APOD archive, 1995 to today.</p>
+      <div class="stack">
+        <button id="randomOne" class="primary" type="button">A random day</button>
+        <button id="randomSet" class="secondary" type="button">A random collection of 6</button>
+        <button id="latestSet" class="secondary" type="button">Back to the latest 9 days</button>
+      </div>
+    </section>
+
+    <!-- ===== View settings panel ===== -->
+    <section id="viewPanel" class="panel" aria-labelledby="viewHeading" hidden>
+      <header class="panel-head">
+        <h2 id="viewHeading">View</h2>
+        <button class="panel-close" type="button" aria-label="Close view settings">&times;</button>
+      </header>
+
+      <fieldset class="segmented">
+        <legend>Viewing mode</legend>
+        <label><input type="radio" name="mode" value="immersive" /> <span>Immersive</span></label>
+        <label><input type="radio" name="mode" value="original" /> <span>Original</span></label>
+        <label><input type="radio" name="mode" value="explore" /> <span>Explore</span></label>
+      </fieldset>
+      <p id="modeHint" class="hint"></p>
+
+      <fieldset class="segmented">
+        <legend>Motion</legend>
+        <label><input type="radio" name="motion" value="off" /> <span>Off</span></label>
+        <label><input type="radio" name="motion" value="subtle" /> <span>Subtle</span></label>
+        <label><input type="radio" name="motion" value="cinematic" /> <span>Cinematic</span></label>
+      </fieldset>
+      <p class="hint">Off is used automatically if your device asks for reduced motion.</p>
+
+      <label class="toggle">
+        <input id="cursorToggle" type="checkbox" />
+        <span>Look around by moving the cursor</span>
+      </label>
+
+      <div class="stack">
+        <button id="resetView" class="secondary" type="button">Reset image position</button>
+        <button id="fullscreenToggle" class="secondary" type="button">Enter fullscreen</button>
+      </div>
+
+      <p class="hint keys">Keys: <kbd>&larr;</kbd> <kbd>&rarr;</kbd> photos, <kbd>I</kbd> info, <kbd>G</kbd> gallery, <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> modes, <kbd>0</kbd> reset, <kbd>F</kbd> fullscreen.</p>
+    </section>
+
+    <footer class="attribution">
+      Independent student project using NASA's <a href="https://science.nasa.gov/apod/" target="_blank" rel="noopener">Astronomy Picture of the Day</a>. Not affiliated with or endorsed by NASA.
+    </footer>
+  </main>
+
+  <!-- ===== Modal: full details for one photo (filled in by script.js) ===== -->
   <dialog id="modal" class="modal" aria-labelledby="modalTitle">
-    <button id="modalClose" class="modal-close" aria-label="Close">&times;</button>
+    <button id="modalClose" class="modal-close" type="button" aria-label="Close details">&times;</button>
     <div id="modalMedia" class="modal-media"></div>
     <div class="modal-text">
-      <h2 id="modalTitle"></h2>
       <p id="modalDate" class="modal-date"></p>
-      <p id="modalExplanation"></p>
+      <h2 id="modalTitle"></h2>
+      <div id="modalExplanation" class="modal-explanation"></div>
       <p id="modalCredit" class="modal-credit"></p>
+      <p id="modalLinks" class="modal-links"></p>
     </div>
   </dialog>
-
-  <footer class="site-footer">
-    Images and text from <a href="https://apod.nasa.gov/apod/" target="_blank" rel="noopener">NASA APOD</a>.
-    Student project, not an official NASA site.
-  </footer>
 
   <script src="js/dateRange.js"></script>
   <script src="js/script.js"></script>
